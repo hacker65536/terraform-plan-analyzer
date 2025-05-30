@@ -1,64 +1,64 @@
 # Terraform Plan Analyzer
 
-jqを使用したTerraform Plan JSONファイルの包括的な分析ツールです。リソース変更とアウトプット変更の詳細な解析機能を提供します。
+A comprehensive analysis tool for Terraform Plan JSON files using jq. Provides detailed analysis capabilities for resource changes and output changes.
 
-## 機能
+## Features
 
-- **リソース変更分析**: create, update, delete, replace, forget, no-op アクションの検出
-- **アウトプット変更分析**: 出力値の変更を追跡
-- **インポート検出**: リソースのインポート操作を識別
-- **複数出力フォーマット**: 基本、簡潔、詳細、no-op専用モード
-- **Markdown対応**: GitHub コメント最適化を含む
-- **文字数制限チェック**: GitHub コメント用の文字数制限警告
+- **Resource Change Analysis**: Detection of create, update, delete, replace, forget, no-op actions
+- **Output Change Analysis**: Track changes in output values
+- **Import Detection**: Identify resource import operations
+- **Multiple Output Formats**: Basic, short, detailed, and no-op only modes
+- **Markdown Support**: Including GitHub comment optimization
+- **Character Limit Check**: Character limit warnings for GitHub comments
 
-## 基本使用法
+## Basic Usage
 
-### Terraform Plan JSONファイルの生成
+### Generate Terraform Plan JSON File
 
 ```bash
-# Terraform plan ファイルを JSON 形式で生成する
+# Generate Terraform plan file in JSON format
 terraform plan -out=plan >/dev/null 2>&1
 terraform show -json plan > plan.json
 ```
 
-### スクリプトの実行
+### Script Execution
 
 ```bash
-# 基本分析（デフォルト）
+# Basic analysis (default)
 ./terraform-plan-analyzer.sh plan.json
 
-# 簡潔表示（diff形式、no-op除く）
+# Short display (diff format, excludes no-op)
 ./terraform-plan-analyzer.sh --short plan.json
 
-# 詳細表示（アクション種類別にグループ化）
+# Detailed display (grouped by action type)
 ./terraform-plan-analyzer.sh --detail plan.json
 
-# no-opリソースのみ表示
+# Show only no-op resources
 ./terraform-plan-analyzer.sh --no-op plan.json
 
-# Markdown形式で出力
+# Output in Markdown format
 ./terraform-plan-analyzer.sh --markdown plan.json
 ./terraform-plan-analyzer.sh --short --markdown plan.json
 ./terraform-plan-analyzer.sh --detail --markdown plan.json
 
-# GitHub コメント最適化（文字数制限チェック付き）
+# GitHub comment optimization (with character limit check)
 ./terraform-plan-analyzer.sh --github-comment plan.json
 ```
 
-## オプション
+## Options
 
-| オプション | 説明 |
-|-----------|------|
-| `--short` | 簡潔な diff 形式で変更のみ表示 |
-| `--detail` | アクション種類別に詳細にグループ化して表示 |
-| `--no-op` | 変更のないリソース（no-op）のみ表示 |
-| `--markdown` | Markdown形式で出力 |
-| `--github-comment` | GitHub コメント用に最適化（文字数制限チェック付き） |
-| `-h, --help` | ヘルプメッセージを表示 |
+| Option | Description |
+|--------|-------------|
+| `--short` | Display only changes in concise diff format |
+| `--detail` | Display detailed breakdown grouped by action type |
+| `--no-op` | Display only resources with no changes (no-op) |
+| `--markdown` | Output in Markdown format |
+| `--github-comment` | Optimize for GitHub comments (with character limit check) |
+| `-h, --help` | Show help message |
 
-## 出力例
+## Output Examples
 
-### 基本モード（デフォルト）
+### Basic Mode (Default)
 ```
 🔍 Terraform Plan Analysis for: plan.json
 ==============================================
@@ -82,7 +82,7 @@ Total Resource Changes: 7
 Applyable: true
 ```
 
-### --short モード
+### --short Mode
 ```
 + aws_s3_bucket.example
 + aws_s3_bucket.logs
@@ -93,7 +93,7 @@ Applyable: true
 + output.bucket_name
 ```
 
-### --detail モード
+### --detail Mode
 ```
 📊 Resource Changes Detail:
 ===========================
@@ -131,7 +131,7 @@ Applyable: true
     create: 1
 ```
 
-### Markdownモード
+### Markdown Mode
 ```markdown
 # Terraform Plan Analysis
 
@@ -157,52 +157,53 @@ Applyable: true
 - **Applyable**: true
 ```
 
-## よく使うjqクエリ
+## Useful jq Queries
 
-### 基本的な集計
+### Basic Aggregation
 ```bash
-# アクション種類ごとの個数集計
+# Count by action type
 jq '[.resource_changes[].change.actions[]] | group_by(.) | map({action: .[0], count: length})' plan.json
 ```
 
-### 実用的なクエリ
+### Practical Queries
 ```bash
-# 削除されるリソース一覧
+# List resources to be deleted
 jq '.resource_changes[] | select(.change.actions[] == "delete") | .address' plan.json
 
-# 作成されるリソース一覧
+# List resources to be created
 jq '.resource_changes[] | select(.change.actions[] == "create") | .address' plan.json
 
-# 更新されるリソース一覧
+# List resources to be updated
 jq '.resource_changes[] | select(.change.actions[] == "update") | .address' plan.json
 ```
 
-## ファイル構成
+## File Structure
 
 ```
-├── README.md                   # このファイル
-└── terraform-plan-analyzer.sh  # Terraform Plan分析スクリプト
+├── README.md                   # This file
+├── README_JP.md               # Japanese version
+└── terraform-plan-analyzer.sh # Terraform Plan analysis script
 ```
 
-## アクション種類
+## Action Types
 
-| シンボル | アクション | 説明 |
-|---------|-----------|------|
-| `+` | create | 新しいリソースの作成 |
-| `~` | update | 既存リソースの更新 |
-| `-` | delete | リソースの削除 |
-| `-/+` | replace | リソースの置換（削除→作成） |
-| `#` | forget | リソースの管理から除外 |
-| (なし) | no-op | 変更なし |
+| Symbol | Action | Description |
+|--------|--------|-------------|
+| `+` | create | Create new resource |
+| `~` | update | Update existing resource |
+| `-` | delete | Delete resource |
+| `-/+` | replace | Replace resource (delete → create) |
+| `#` | forget | Remove from management |
+| (none) | no-op | No changes |
 
-## 特殊表示
+## Special Indicators
 
-- `Import`: インポート操作を伴うリソース
-- `output.`: 出力値の変更
+- `Import`: Resource with import operation
+- `output.`: Output value changes
 
-## 依存関係
+## Dependencies
 
-- **jq**: JSON処理に必要。インストールコマンド：
+- **jq**: Required for JSON processing. Installation commands:
   - macOS: `brew install jq`
   - Ubuntu/Debian: `sudo apt-get install jq`
   - CentOS/RHEL: `sudo yum install jq`
@@ -210,6 +211,6 @@ jq '.resource_changes[] | select(.change.actions[] == "update") | .address' plan
 ---
 
 **Note:** 
-- `--short` および `--detail` オプションでは、`no-op` アクションは非表示になります
-- `--github-comment` オプションは65,536文字の制限をチェックし、超過時に警告を表示します
-- スクリプトは自動的にjqの存在をチェックし、不足時にインストール手順を表示します
+- The `--short` and `--detail` options hide `no-op` actions
+- The `--github-comment` option checks the 65,536 character limit and displays warnings when exceeded
+- The script automatically checks for jq availability and displays installation instructions when missing
