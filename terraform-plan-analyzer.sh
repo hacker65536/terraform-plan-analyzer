@@ -11,19 +11,8 @@
 # CONSTANTS
 # =============================================================================
 
-# Define action types as constants for consistency
-readonly RESOURCE_ACTIONS=("replace" "create" "update" "delete" "forget" "no-op")
-readonly OUTPUT_ACTIONS=("create" "update" "delete" "no-op")
-readonly CHANGE_ACTIONS=("create" "update" "delete" "forget")
-
-# Define symbols for different action types
-readonly ACTION_SYMBOLS=(
-    ["replace"]="-/+"
-    ["create"]="+"
-    ["update"]="~"
-    ["delete"]="-"
-    ["forget"]="#"
-)
+# Note: Action types and symbols are defined inline where used
+# to avoid unused variable warnings from shellcheck
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -106,7 +95,8 @@ build_resource_filter() {
 get_resources_by_action() {
     local action="$1"
     local file="$2"
-    local filter=$(build_resource_filter "$action")
+    local filter
+    filter=$(build_resource_filter "$action")
     
     jq -r ".resource_changes[] | $filter | {address: .address, importing: (.change.importing // false)}" "$file"
 }
@@ -115,7 +105,8 @@ get_resources_by_action() {
 count_resources_by_action() {
     local action="$1"
     local file="$2"
-    local filter=$(build_resource_filter "$action")
+    local filter
+    filter=$(build_resource_filter "$action")
     
     jq -r "[.resource_changes[] | $filter] | length" "$file"
 }
@@ -142,7 +133,8 @@ build_output_filter() {
 get_output_changes_by_action() {
     local action="$1"
     local file="$2"
-    local filter=$(build_output_filter "$action")
+    local filter
+    filter=$(build_output_filter "$action")
     
     jq -r ".output_changes // {} | to_entries[] | $filter | {name: .key, actions: .value.actions}" "$file"
 }
@@ -151,7 +143,8 @@ get_output_changes_by_action() {
 count_output_changes_by_action() {
     local action="$1"
     local file="$2"
-    local filter=$(build_output_filter "$action")
+    local filter
+    filter=$(build_output_filter "$action")
     
     jq -r "[.output_changes // {} | to_entries[] | $filter] | length" "$file"
 }
@@ -169,7 +162,8 @@ count_importing_resources() {
 # Check if there are any resource changes (excluding no-op)
 has_resource_changes() {
     local file="$1"
-    local change_count=$(jq -r '[.resource_changes[] | 
+    local change_count
+    change_count=$(jq -r '[.resource_changes[] | 
                                 select(.change.actions | map(. != "no-op") | any)] | 
                                 length' "$file")
     [ "$change_count" -gt 0 ]
@@ -178,7 +172,8 @@ has_resource_changes() {
 # Check if there are any output changes (excluding no-op)
 has_output_changes() {
     local file="$1"
-    local change_count=$(jq -r '[.output_changes // {} | 
+    local change_count
+    change_count=$(jq -r '[.output_changes // {} | 
                                 to_entries[] | 
                                 select(.value.actions | map(. != "no-op") | any)] | 
                                 length' "$file")
@@ -221,25 +216,30 @@ show_resource_action_section() {
     local action="$1"
     local file="$2"
     local markdown="$3"
-    local action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
+    local action_upper
+    action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
     
-    local count=$(count_resources_by_action "$action" "$file")
+    local count
+    count=$(count_resources_by_action "$action" "$file")
     if [ "$count" -gt 0 ]; then
         echo ""
         
         if [ "$markdown" = "true" ]; then
             echo "### $action_upper Actions"
             echo ""
-            local format_expr=$(format_resource_item "$action" "- ")
+            local format_expr
+            format_expr=$(format_resource_item "$action" "- ")
             get_resources_by_action "$action" "$file" | jq -r "$format_expr"
         else
             echo "📊 $action_upper Actions:"
             
-            local separator_length=$(get_separator_length "$action")
-            printf '=%.0s' $(seq 1 $separator_length)
+            local separator_length
+            separator_length=$(get_separator_length "$action")
+            printf '=%.0s' $(seq 1 "$separator_length")
             echo ""
             
-            local format_expr=$(format_resource_item "$action" "  - ")
+            local format_expr
+            format_expr=$(format_resource_item "$action" "  - ")
             get_resources_by_action "$action" "$file" | jq -r "$format_expr"
         fi
     fi
@@ -261,9 +261,11 @@ show_output_changes_section() {
     local action="$1"
     local file="$2"
     local markdown="$3"
-    local action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
+    local action_upper
+    action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
     
-    local count=$(count_output_changes_by_action "$action" "$file")
+    local count
+    count=$(count_output_changes_by_action "$action" "$file")
     if [ "$count" -gt 0 ]; then
         echo ""
         
@@ -274,8 +276,9 @@ show_output_changes_section() {
         else
             echo "📊 OUTPUT $action_upper Actions:"
             
-            local separator_length=$(get_output_separator_length "$action")
-            printf '=%.0s' $(seq 1 $separator_length)
+            local separator_length
+            separator_length=$(get_output_separator_length "$action")
+            printf '=%.0s' $(seq 1 "$separator_length")
             echo ""
             
             get_output_changes_by_action "$action" "$file" | jq -r '. as $item | "  - " + $item.name'
@@ -439,7 +442,8 @@ EOF
                .[]' "$file"
         
         # Add importing count if there are any
-        local importing_count=$(count_importing_resources "$file")
+        local importing_count
+        importing_count=$(count_importing_resources "$file")
         if [ "$importing_count" -gt 0 ]; then
             echo "- **importing**: $importing_count"
         fi
@@ -480,7 +484,8 @@ EOF
                .[]' "$file"
         
         # Add importing count if there are any
-        local importing_count=$(count_importing_resources "$file")
+        local importing_count
+        importing_count=$(count_importing_resources "$file")
         if [ "$importing_count" -gt 0 ]; then
             echo "importing: $importing_count"
         fi
@@ -524,7 +529,8 @@ generate_summary() {
                .[]' "$file"
         
         # Add importing count if there are any
-        local importing_count=$(count_importing_resources "$file")
+        local importing_count
+        importing_count=$(count_importing_resources "$file")
         if [ "$importing_count" -gt 0 ]; then
             echo "- **importing**: $importing_count"
         fi
@@ -560,7 +566,8 @@ generate_summary() {
                .[]' "$file"
         
         # Add importing count if there are any
-        local importing_count=$(count_importing_resources "$file")
+        local importing_count
+        importing_count=$(count_importing_resources "$file")
         if [ "$importing_count" -gt 0 ]; then
             echo "    importing: $importing_count"
         fi
@@ -590,7 +597,7 @@ generate_summary() {
 # Check if output exceeds GitHub comment character limit
 check_github_comment_limit() {
     local output="$1"
-    local char_count=$(echo "$output" | wc -c)
+    local char_count=${#output}
     local limit=65536
     
     if [ "$char_count" -gt "$limit" ]; then
