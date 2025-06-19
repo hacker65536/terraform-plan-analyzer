@@ -83,10 +83,10 @@ build_resource_filter() {
             echo 'select(.change.actions == ["delete"])'
             ;;
         "replace")
-            echo 'select(.change.actions | contains(["create"]) and contains(["delete"]) and (.change.action_reason // "" | contains("replace_because_cannot_update")) and (.change.importing // false | not))'
+            echo 'select(.change.actions | contains(["create"]) and contains(["delete"])) | select(has("action_reason")) | select(.action_reason == "replace_because_cannot_update") | select((.change.importing // false | . == false))'
             ;;
         "replace-import")
-            echo 'select(.change.actions | contains(["create"]) and contains(["delete"]) and (.change.action_reason // "" | contains("replace_because_cannot_update")) and (.change.importing // false))'
+            echo 'select(.change.actions | contains(["create"]) and contains(["delete"])) | select(has("action_reason")) | select(.action_reason == "replace_because_cannot_update") | select((.change.importing // false | . != false))'
             ;;
         "import-nochange")
             echo 'select(.change.actions == ["no-op"] and (.change.importing // false))'
@@ -174,7 +174,7 @@ count_output_changes_by_action() {
 # Count importing resources
 count_importing_resources() {
     local file="$1"
-    jq -r '[.resource_changes[] | select(.change | has("importing") and .importing != null)] | length' "$file"
+    jq -r '[.resource_changes[] | select(.change.importing // false)] | length' "$file"
 }
 
 # Check if there are any resource changes (excluding no-op)
@@ -237,7 +237,7 @@ show_resource_action_section() {
     local action_upper
     action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
     
-    local count
+    local coun
     count=$(count_resources_by_action "$action" "$file")
     if [ "$count" -gt 0 ]; then
         echo ""
@@ -380,10 +380,14 @@ show_detail_output() {
     fi
     
     # Process each resource action type in logical order
-    local detail_actions=("create" "update" "update-import" "delete" "replace" "replace-import" "import-nochange" "remove-forget")
+    local detail_actions=("create" "update" "update-import" "delete" "import-nochange" "remove-forget")
     for action in "${detail_actions[@]}"; do
         show_resource_action_section "$action" "$file" "$markdown"
     done
+    
+    # Handle replace and replace-import actions using the standardized functions
+    show_resource_action_section "replace" "$file" "$markdown"
+    show_resource_action_section "replace-import" "$file" "$markdown"
     
     # Process output changes if they exist
     if has_output_changes "$file"; then
@@ -464,7 +468,7 @@ EOF
         # Add importing count if there are any
         local importing_count
         importing_count=$(count_importing_resources "$file")
-        if [ "$importing_count" -gt 0 ]; then
+        if [ -n "$importing_count" ] && [ "$importing_count" -gt 0 ]; then
             echo "- **importing**: $importing_count"
         fi
         
@@ -506,7 +510,7 @@ EOF
         # Add importing count if there are any
         local importing_count
         importing_count=$(count_importing_resources "$file")
-        if [ "$importing_count" -gt 0 ]; then
+        if [ -n "$importing_count" ] && [ "$importing_count" -gt 0 ]; then
             echo "importing: $importing_count"
         fi
 
@@ -551,7 +555,7 @@ generate_summary() {
         # Add importing count if there are any
         local importing_count
         importing_count=$(count_importing_resources "$file")
-        if [ "$importing_count" -gt 0 ]; then
+        if [ -n "$importing_count" ] && [ "$importing_count" -gt 0 ]; then
             echo "- **importing**: $importing_count"
         fi
         
@@ -588,7 +592,7 @@ generate_summary() {
         # Add importing count if there are any
         local importing_count
         importing_count=$(count_importing_resources "$file")
-        if [ "$importing_count" -gt 0 ]; then
+        if [ -n "$importing_count" ] && [ "$importing_count" -gt 0 ]; then
             echo "    importing: $importing_count"
         fi
         

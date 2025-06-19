@@ -68,6 +68,7 @@ terraform show -json plan > plan.json
 create: 5
 update: 2
 delete: 3
+importing: 1
 
 📊 Resource Types:
 -----------------
@@ -87,7 +88,7 @@ Applyable: true
 + aws_s3_bucket.example
 + aws_s3_bucket.logs
 ~ aws_iam_role.lambda_role
-~ aws_lambda_function.processor
+~ aws_lambda_function.processor Import
 - aws_s3_bucket.old_bucket
 -/+ aws_lambda_function.migrated Import
 + output.bucket_name
@@ -106,14 +107,17 @@ Applyable: true
 📊 UPDATE Actions:
 ==================
   - aws_iam_role.lambda_role
-  - aws_lambda_function.processor
+
+📊 UPDATE-IMPORT Actions:
+=========================
+  - aws_lambda_function.processor Import
 
 📊 DELETE Actions:
 ==================
   - aws_s3_bucket.old_bucket
 
-📊 REPLACE Actions:
-===================
+📊 REPLACE-IMPORT Actions:
+==========================
   - aws_lambda_function.migrated Import
 
 📊 OUTPUT CREATE Actions:
@@ -123,10 +127,11 @@ Applyable: true
 📊 Summary:
   Resource Changes:
     create: 2
-    update: 2
+    update: 1
+    update-import: 1
     delete: 1
-    replace: 1
-    importing: 1
+    replace-import: 1
+    importing: 2
   Output Changes:
     create: 1
 ```
@@ -140,9 +145,10 @@ Applyable: true
 ## Change Actions Summary
 
 - **create**: 2
-- **update**: 2
+- **update**: 1
+- **update-import**: 1
 - **delete**: 1
-- **importing**: 1
+- **importing**: 2
 
 ## Resource Types
 
@@ -194,6 +200,7 @@ jq '.resource_changes[] | select(.change.actions[] == "update") | .address' plan
 | `-` | delete | Delete resource |
 | `-/+` | replace | Replace resource (delete → create) |
 | `#` | forget | Remove from management |
+| `=` | import-nochange | Import without changes |
 | (none) | no-op | No changes |
 
 ## Special Indicators
