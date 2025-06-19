@@ -70,23 +70,32 @@ build_resource_filter() {
     local action="$1"
     
     case "$action" in
-        "replace")
-            echo 'select(.change.actions | contains(["create"]) and contains(["delete"]))'
-            ;;
         "create")
-            echo 'select(.change.actions | contains(["create"]) and (contains(["delete"]) | not))'
+            echo 'select(.change.actions == ["create"])'
             ;;
         "update")
-            echo 'select(.change.actions | contains(["update"]))'
+            echo 'select(.change.actions == ["update"] and (.change.importing // false | not))'
+            ;;
+        "update-import")
+            echo 'select(.change.actions == ["update"] and (.change.importing // false))'
             ;;
         "delete")
-            echo 'select(.change.actions | contains(["delete"]) and (contains(["create"]) | not))'
+            echo 'select(.change.actions == ["delete"])'
             ;;
-        "forget")
-            echo 'select(.change.actions | contains(["forget"]))'
+        "replace")
+            echo 'select(.change.actions | contains(["create"]) and contains(["delete"]) and (.change.action_reason // "" | contains("replace_because_cannot_update")) and (.change.importing // false | not))'
+            ;;
+        "replace-import")
+            echo 'select(.change.actions | contains(["create"]) and contains(["delete"]) and (.change.action_reason // "" | contains("replace_because_cannot_update")) and (.change.importing // false))'
+            ;;
+        "import-nochange")
+            echo 'select(.change.actions == ["no-op"] and (.change.importing // false))'
+            ;;
+        "remove-forget")
+            echo 'select(.change.actions == ["forget"])'
             ;;
         "no-op")
-            echo 'select(.change.actions == ["no-op"])'
+            echo 'select(.change.actions == ["no-op"] and (.change.importing // false | not))'
             ;;
     esac
 }
@@ -120,6 +129,15 @@ build_output_filter() {
     local action="$1"
     
     case "$action" in
+        "create")
+            echo 'select(.value.actions == ["create"])'
+            ;;
+        "update")
+            echo 'select(.value.actions == ["update"])'
+            ;;
+        "delete")
+            echo 'select(.value.actions == ["delete"])'
+            ;;
         "no-op")
             echo 'select(.value.actions == ["no-op"])'
             ;;
@@ -362,7 +380,7 @@ show_detail_output() {
     fi
     
     # Process each resource action type in logical order
-    local detail_actions=("replace" "create" "update" "delete" "forget")
+    local detail_actions=("create" "update" "update-import" "delete" "replace" "replace-import" "import-nochange" "remove-forget")
     for action in "${detail_actions[@]}"; do
         show_resource_action_section "$action" "$file" "$markdown"
     done
