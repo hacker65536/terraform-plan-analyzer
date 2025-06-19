@@ -296,7 +296,7 @@ generate_short_output() {
     
     # Show resource changes with appropriate symbols
     jq -r '.resource_changes[] | 
-           select(.change.actions | map(. != "no-op") | any) | 
+           select((.change.actions | map(. != "no-op") | any) or (.change.importing // false)) | 
            if (.change.actions | contains(["create"]) and contains(["delete"])) then 
                "-/+ " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions | contains(["create"])) then 
@@ -307,6 +307,8 @@ generate_short_output() {
                "- " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions | contains(["forget"])) then 
                "# " + .address + " Remove" + (if .change.importing then " Import" else "" end)
+           elif (.change.actions == ["no-op"] and (.change.importing // false)) then 
+               "= " + .address + " Import"
            else empty end' "$file"
     
     # Show output changes with appropriate symbols
@@ -621,7 +623,7 @@ generate_mode_output() {
         "short")
             if has_any_changes "$TFPLAN_FILE"; then
                 if [ "$MARKDOWN" = "true" ]; then
-                    echo "<details><summary>Short Terraform Plan Output </summary>"
+                    echo "<details open><summary>Short Terraform Plan Output </summary>"
                     echo ""
                     echo "\`\`\`hcl"
                     generate_short_output "$TFPLAN_FILE"
