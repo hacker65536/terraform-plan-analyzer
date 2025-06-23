@@ -324,9 +324,9 @@ generate_short_output() {
            elif (.change.actions | contains(["delete"])) then 
                "- " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions | contains(["forget"])) then 
-               "# " + .address + " Remove" + (if .change.importing then " Import" else "" end)
+               "# " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions == ["no-op"] and (.change.importing // false)) then 
-               "= " + .address + " Import"
+               "= " + .address 
            else empty end' "$file"
     
     # Show output changes with appropriate symbols
@@ -647,6 +647,7 @@ generate_mode_output() {
                 if [ "$MARKDOWN" = "true" ]; then
                     echo "<details open><summary>Short Terraform Plan Output </summary>"
                     echo ""
+                    echo '`+` create , `~` update , `-` delete , `+/-` replace , `#` remove , `=` import(no change)'
                     echo "\`\`\`hcl"
                     generate_short_output "$TFPLAN_FILE"
                     echo "\`\`\`"
@@ -761,7 +762,8 @@ else
             if has_any_changes "$TFPLAN_FILE"; then
                 if [ "$MARKDOWN" = "true" ]; then
                     echo "<details><summary>Short Result (Click me)</summary>"
-                    echo ""
+                    echo "" 
+                    echo '`+` create , `~` update , `-` delete , `+/-` replace , `#` remove , `=` import(no change)'
                     echo "\`\`\`hcl"
                     generate_short_output "$TFPLAN_FILE"
                     echo "\`\`\`"
