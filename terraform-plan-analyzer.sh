@@ -80,7 +80,7 @@ initialize_cache() {
     
     # Single jq execution to get all counts
     local cache_data
-    cache_data=$(jq -r '
+    if ! cache_data=$(jq -r '
         def count_by_action(action):
             if action == "create" then
                 [(.resource_changes // [])[] | select(.change.actions == ["create"])] | length
@@ -133,9 +133,7 @@ initialize_cache() {
             "output_no_op": count_output_by_action("no-op"),
             "importing_total": [(.resource_changes // [])[] | select(.change.importing // false)] | length
         }
-    ' "$file" 2>/dev/null)
-    
-    if [[ $? -ne 0 ]] || [[ -z "$cache_data" ]]; then
+    ' "$file" 2>/dev/null) || [[ -z "$cache_data" ]]; then
         echo "Error: Failed to parse JSON file or execute jq query" >&2
         exit 1
     fi
@@ -776,7 +774,7 @@ show_changes_output() {
                 if [ "$markdown" = "true" ]; then
                     echo "<details><summary>Short Result (Click me)</summary>"
                     echo "" 
-                    echo '`+` create , `~` update , `-` delete , `+/-` replace , `#` remove , `=` import(no change)'
+                    echo "\`+\` create , \`~\` update , \`-\` delete , \`+/-\` replace , \`#\` remove , \`=\` import(no change)"
                     echo "\`\`\`hcl"
                     generate_short_output "$file"
                     echo "\`\`\`"
