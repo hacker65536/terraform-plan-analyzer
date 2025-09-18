@@ -439,8 +439,10 @@ generate_short_output() {
     # Show resource changes with appropriate symbols
     jq -r '(.resource_changes // [])[] | 
            select((.change.actions | map(. != "no-op") | any) or (.change.importing // false)) | 
-           if (.change.actions | contains(["create"]) and contains(["delete"])) then 
+           if (.change.actions == ["delete", "create"]) then 
                "-/+ " + .address + (if .change.importing then " Import" else "" end)
+           elif (.change.actions == ["create", "delete"]) then 
+               "+/- " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions | contains(["create"])) then 
                "+ " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions | contains(["update"])) then 
@@ -774,7 +776,7 @@ show_changes_output() {
                 if [ "$markdown" = "true" ]; then
                     echo "<details><summary>Short Result (Click me)</summary>"
                     echo "" 
-                    echo "\`+\` create , \`~\` update , \`-\` delete , \`+/-\` replace , \`#\` remove , \`=\` import(no change)"
+                    echo "\`+\` create , \`~\` update , \`-\` delete , \`-/+\` replace(delete->create) , \`+/-\` replace(create->delete) , \`#\` remove , \`=\` import(no change)"
                     echo "\`\`\`hcl"
                     generate_short_output "$file"
                     echo "\`\`\`"
