@@ -107,7 +107,7 @@ get_resources_by_action() {
     local filter
     filter=$(build_resource_filter "$action")
     
-    jq -r ".resource_changes[] | $filter | {address: .address, importing: (.change.importing // false)}" "$file"
+    jq -r "(.resource_changes // [])[] | $filter | {address: .address, importing: (.change.importing // false)}" "$file"
 }
 
 # Count resources by action type
@@ -117,7 +117,7 @@ count_resources_by_action() {
     local filter
     filter=$(build_resource_filter "$action")
     
-    jq -r "[.resource_changes[] | $filter] | length" "$file"
+    jq -r "[(.resource_changes // [])[] | $filter] | length" "$file"
 }
 
 # =============================================================================
@@ -174,17 +174,17 @@ count_output_changes_by_action() {
 # Count importing resources
 count_importing_resources() {
     local file="$1"
-    jq -r '[.resource_changes[] | select(.change.importing // false)] | length' "$file"
+    jq -r '[(.resource_changes // [])[] | select(.change.importing // false)] | length' "$file"
 }
 
 # Check if there are any resource changes (excluding no-op)
 has_resource_changes() {
     local file="$1"
     local change_count
-    change_count=$(jq -r '[.resource_changes[] | 
+    change_count=$(jq -r '[(.resource_changes // [])[] | 
                                 select(.change.actions | map(. != "no-op") | any)] | 
                                 length' "$file")
-    [ "$change_count" -gt 0 ]
+    [ -n "$change_count" ] && [ "$change_count" -gt 0 ]
 }
 
 # Check if there are any output changes (excluding no-op)
@@ -195,7 +195,7 @@ has_output_changes() {
                                 to_entries[] | 
                                 select(.value.actions | map(. != "no-op") | any)] | 
                                 length' "$file")
-    [ "$change_count" -gt 0 ]
+    [ -n "$change_count" ] && [ "$change_count" -gt 0 ]
 }
 
 # Check if there are any changes at all (resources or outputs)
@@ -313,7 +313,7 @@ generate_short_output() {
     local file="$1"
     
     # Show resource changes with appropriate symbols
-    jq -r '.resource_changes[] | 
+    jq -r '(.resource_changes // [])[] | 
            select((.change.actions | map(. != "no-op") | any) or (.change.importing // false)) | 
            if (.change.actions | contains(["create"]) and contains(["delete"])) then 
                "-/+ " + .address + (if .change.importing then " Import" else "" end)
@@ -454,7 +454,7 @@ show_basic_output() {
 ## Change Actions Summary
 
 EOF
-        jq -r '[.resource_changes[].change.actions[]] | 
+        jq -r '[(.resource_changes // [])[].change.actions[]] | 
                group_by(.) | 
                map({action: .[0], count: length}) | 
                sort_by(if .action == "create" then 1 
@@ -477,7 +477,7 @@ EOF
 ## Resource Types
 
 EOF
-        jq -r '.resource_changes | 
+        jq -r '(.resource_changes // []) | 
                group_by(.type) | 
                map("- **\(.[0].type)**: \(length)") | 
                sort | 
@@ -488,7 +488,7 @@ EOF
 ## Plan Summary
 
 EOF
-        jq -r '"- **Terraform Version**: \(.terraform_version)\n- **Total Resource Changes**: \(.resource_changes | length)\n- **Applyable**: \(.applyable)"' "$file"
+        jq -r '"- **Terraform Version**: \(.terraform_version)\n- **Total Resource Changes**: \((.resource_changes // []) | length)\n- **Applyable**: \(.applyable)"' "$file"
     else
         echo "🔍 Terraform Plan Analysis for: $file"
         echo "=============================================="
@@ -496,7 +496,7 @@ EOF
         echo ""
         echo "📊 Change Actions Summary:"
         echo "-------------------------"
-        jq -r '[.resource_changes[].change.actions[]] | 
+        jq -r '[(.resource_changes // [])[].change.actions[]] | 
                group_by(.) | 
                map({action: .[0], count: length}) | 
                sort_by(if .action == "create" then 1 
@@ -517,7 +517,7 @@ EOF
         echo ""
         echo "📊 Resource Types:"
         echo "-----------------"
-        jq -r '.resource_changes | 
+        jq -r '(.resource_changes // []) | 
                group_by(.type) | 
                map("  \(.[0].type): \(length)") | 
                sort | 
@@ -527,7 +527,7 @@ EOF
         echo "📊 Plan Summary:"
         echo "---------------"
         jq -r '"Terraform Version: \(.terraform_version)
-Total Resource Changes: \(.resource_changes | length)
+Total Resource Changes: \((.resource_changes // []) | length)
 Applyable: \(.applyable)"' "$file"
     fi
 }
@@ -540,7 +540,7 @@ generate_summary() {
     if [ "$markdown" = "true" ]; then
         echo "### Resource Changes Summary"
         echo ""
-        jq -r '[.resource_changes[].change.actions[]] | 
+        jq -r '[(.resource_changes // [])[].change.actions[]] | 
                map(select(. != "no-op")) | 
                group_by(.) | 
                map({action: .[0], count: length}) | 
@@ -577,7 +577,7 @@ generate_summary() {
         fi
     else
         echo "  Resource Changes:"
-        jq -r '[.resource_changes[].change.actions[]] | 
+        jq -r '[(.resource_changes // [])[].change.actions[]] | 
                map(select(. != "no-op")) | 
                group_by(.) | 
                map({action: .[0], count: length}) | 
