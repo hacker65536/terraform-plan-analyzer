@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # =============================================================================
 # Terraform Plan JSON Analysis Script using jq
@@ -11,8 +11,17 @@
 # CONSTANTS
 # =============================================================================
 
-# Note: Action types and symbols are defined inline where used
-# to avoid unused variable warnings from shellcheck
+readonly GITHUB_COMMENT_LIMIT="${TERRAFORM_ANALYZER_GITHUB_LIMIT:-65536}"
+readonly DEFAULT_MODE="${TERRAFORM_ANALYZER_DEFAULT_MODE:-basic}"
+
+# =============================================================================
+# GLOBAL VARIABLES FOR CACHING
+# =============================================================================
+
+declare -A resource_counts
+declare -A output_counts
+declare -g importing_count_cached=""
+declare -g cache_initialized="false"
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -61,6 +70,93 @@ EXAMPLES:
 EOF
 }
 
+# Initialize cache with all counts in a single jq execution
+initialize_cache() {
+    local file="$1"
+    
+    if [[ "$cache_initialized" == "true" ]]; then
+        return 0
+    fi
+    
+    # Single jq execution to get all counts
+    local cache_data
+    cache_data=$(jq -r '
+        def count_by_action(action):
+            if action == "create" then
+                [(.resource_changes // [])[] | select(.change.actions == ["create"])] | length
+            elif action == "update" then
+                [(.resource_changes // [])[] | select(.change.actions == ["update"] and (.change.importing // false | not))] | length
+            elif action == "update-import" then
+                [(.resource_changes // [])[] | select(.change.actions == ["update"] and (.change.importing // false))] | length
+            elif action == "delete" then
+                [(.resource_changes // [])[] | select(.change.actions == ["delete"])] | length
+            elif action == "replace" then
+                [(.resource_changes // [])[] | select(.change.actions | contains(["create"]) and contains(["delete"])) | select(has("action_reason")) | select(.action_reason == "replace_because_cannot_update") | select((.change.importing // false | . == false))] | length
+            elif action == "replace-import" then
+                [(.resource_changes // [])[] | select(.change.actions | contains(["create"]) and contains(["delete"])) | select(has("action_reason")) | select(.action_reason == "replace_because_cannot_update") | select((.change.importing // false | . != false))] | length
+            elif action == "import-nochange" then
+                [(.resource_changes // [])[] | select(.change.actions == ["no-op"] and (.change.importing // false))] | length
+            elif action == "remove-forget" then
+                [(.resource_changes // [])[] | select(.change.actions == ["forget"])] | length
+            elif action == "no-op" then
+                [(.resource_changes // [])[] | select(.change.actions == ["no-op"] and (.change.importing // false | not))] | length
+            else
+                0
+            end;
+        
+        def count_output_by_action(action):
+            if action == "create" then
+                [.output_changes // {} | to_entries[] | select(.value.actions == ["create"])] | length
+            elif action == "update" then
+                [.output_changes // {} | to_entries[] | select(.value.actions == ["update"])] | length
+            elif action == "delete" then
+                [.output_changes // {} | to_entries[] | select(.value.actions == ["delete"])] | length
+            elif action == "no-op" then
+                [.output_changes // {} | to_entries[] | select(.value.actions == ["no-op"])] | length
+            else
+                0
+            end;
+        
+        {
+            "resource_create": count_by_action("create"),
+            "resource_update": count_by_action("update"),
+            "resource_update_import": count_by_action("update-import"),
+            "resource_delete": count_by_action("delete"),
+            "resource_replace": count_by_action("replace"),
+            "resource_replace_import": count_by_action("replace-import"),
+            "resource_import_nochange": count_by_action("import-nochange"),
+            "resource_remove_forget": count_by_action("remove-forget"),
+            "resource_no_op": count_by_action("no-op"),
+            "output_create": count_output_by_action("create"),
+            "output_update": count_output_by_action("update"),
+            "output_delete": count_output_by_action("delete"),
+            "output_no_op": count_output_by_action("no-op"),
+            "importing_total": [(.resource_changes // [])[] | select(.change.importing // false)] | length
+        }
+    ' "$file" 2>/dev/null)
+    
+    if [[ $? -ne 0 ]] || [[ -z "$cache_data" ]]; then
+        echo "Error: Failed to parse JSON file or execute jq query" >&2
+        exit 1
+    fi
+    
+    # Parse the JSON result and populate associative arrays
+    eval "$(echo "$cache_data" | jq -r '
+        to_entries[] | 
+        if (.key | startswith("resource_")) then
+            "resource_counts[\"" + (.key | sub("resource_"; "")) + "\"]=" + (.value | tostring)
+        elif (.key | startswith("output_")) then
+            "output_counts[\"" + (.key | sub("output_"; "")) + "\"]=" + (.value | tostring)
+        elif .key == "importing_total" then
+            "importing_count_cached=" + (.value | tostring)
+        else
+            empty
+        end
+    ')"
+    
+    cache_initialized="true"
+}
+
 # =============================================================================
 # RESOURCE ANALYSIS FUNCTIONS
 # =============================================================================
@@ -107,17 +203,28 @@ get_resources_by_action() {
     local filter
     filter=$(build_resource_filter "$action")
     
-    jq -r "(.resource_changes // [])[] | $filter | {address: .address, importing: (.change.importing // false)}" "$file"
+    jq -r "(.resource_changes // [])[] | $filter | {address: .address, importing: (.change.importing // false)}" "$file" 2>/dev/null
 }
 
-# Count resources by action type
+# Count resources by action type (using cache)
 count_resources_by_action() {
     local action="$1"
     local file="$2"
-    local filter
-    filter=$(build_resource_filter "$action")
     
-    jq -r "[(.resource_changes // [])[] | $filter] | length" "$file"
+    initialize_cache "$file"
+    
+    # Convert action name to match cache key format
+    local cache_key
+    case "$action" in
+        "update-import") cache_key="update_import" ;;
+        "replace-import") cache_key="replace_import" ;;
+        "import-nochange") cache_key="import_nochange" ;;
+        "remove-forget") cache_key="remove_forget" ;;
+        "no-op") cache_key="no_op" ;;
+        *) cache_key="$action" ;;
+    esac
+    
+    echo "${resource_counts[$cache_key]:-0}"
 }
 
 # =============================================================================
@@ -154,48 +261,61 @@ get_output_changes_by_action() {
     local filter
     filter=$(build_output_filter "$action")
     
-    jq -r ".output_changes // {} | to_entries[] | $filter | {name: .key, actions: .value.actions}" "$file"
+    jq -r ".output_changes // {} | to_entries[] | $filter | {name: .key, actions: .value.actions}" "$file" 2>/dev/null
 }
 
-# Count output changes by action type
+# Count output changes by action type (using cache)
 count_output_changes_by_action() {
     local action="$1"
     local file="$2"
-    local filter
-    filter=$(build_output_filter "$action")
     
-    jq -r "[.output_changes // {} | to_entries[] | $filter] | length" "$file"
+    initialize_cache "$file"
+    
+    # Convert action name to match cache key format
+    local cache_key
+    case "$action" in
+        "no-op") cache_key="no_op" ;;
+        *) cache_key="$action" ;;
+    esac
+    
+    echo "${output_counts[$cache_key]:-0}"
 }
 
 # =============================================================================
 # CHANGE DETECTION FUNCTIONS
 # =============================================================================
 
-# Count importing resources
+# Count importing resources (using cache)
 count_importing_resources() {
     local file="$1"
-    jq -r '[(.resource_changes // [])[] | select(.change.importing // false)] | length' "$file"
+    initialize_cache "$file"
+    echo "$importing_count_cached"
 }
 
 # Check if there are any resource changes (excluding no-op)
 has_resource_changes() {
     local file="$1"
-    local change_count
-    change_count=$(jq -r '[(.resource_changes // [])[] | 
-                                select(.change.actions | map(. != "no-op") | any)] | 
-                                length' "$file")
-    [ -n "$change_count" ] && [ "$change_count" -gt 0 ]
+    initialize_cache "$file"
+    
+    local total_changes=0
+    for action in create update update_import delete replace replace_import import_nochange remove_forget; do
+        total_changes=$((total_changes + ${resource_counts[$action]:-0}))
+    done
+    
+    [ "$total_changes" -gt 0 ]
 }
 
 # Check if there are any output changes (excluding no-op)
 has_output_changes() {
     local file="$1"
-    local change_count
-    change_count=$(jq -r '[.output_changes // {} | 
-                                to_entries[] | 
-                                select(.value.actions | map(. != "no-op") | any)] | 
-                                length' "$file")
-    [ -n "$change_count" ] && [ "$change_count" -gt 0 ]
+    initialize_cache "$file"
+    
+    local total_changes=0
+    for action in create update delete; do
+        total_changes=$((total_changes + ${output_counts[$action]:-0}))
+    done
+    
+    [ "$total_changes" -gt 0 ]
 }
 
 # Check if there are any changes at all (resources or outputs)
@@ -220,6 +340,12 @@ get_separator_length() {
     esac
 }
 
+# Generate separator string efficiently
+generate_separator() {
+    local length="$1"
+    printf '=%.0s' $(seq 1 "$length")
+}
+
 # Format resource item display
 format_resource_item() {
     local action="$1"
@@ -237,9 +363,9 @@ show_resource_action_section() {
     local action_upper
     action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
     
-    local coun
-    count=$(count_resources_by_action "$action" "$file")
-    if [ "$count" -gt 0 ]; then
+    local resource_count
+    resource_count=$(count_resources_by_action "$action" "$file")
+    if [ "$resource_count" -gt 0 ]; then
         echo ""
         
         if [ "$markdown" = "true" ]; then
@@ -253,7 +379,7 @@ show_resource_action_section() {
             
             local separator_length
             separator_length=$(get_separator_length "$action")
-            printf '=%.0s' $(seq 1 "$separator_length")
+            generate_separator "$separator_length"
             echo ""
             
             local format_expr
@@ -282,9 +408,9 @@ show_output_changes_section() {
     local action_upper
     action_upper=$(echo "$action" | tr '[:lower:]' '[:upper:]')
     
-    local count
-    count=$(count_output_changes_by_action "$action" "$file")
-    if [ "$count" -gt 0 ]; then
+    local output_count
+    output_count=$(count_output_changes_by_action "$action" "$file")
+    if [ "$output_count" -gt 0 ]; then
         echo ""
         
         if [ "$markdown" = "true" ]; then
@@ -296,7 +422,7 @@ show_output_changes_section() {
             
             local separator_length
             separator_length=$(get_output_separator_length "$action")
-            printf '=%.0s' $(seq 1 "$separator_length")
+            generate_separator "$separator_length"
             echo ""
             
             get_output_changes_by_action "$action" "$file" | jq -r '. as $item | "  - " + $item.name'
@@ -327,7 +453,7 @@ generate_short_output() {
                "# " + .address + (if .change.importing then " Import" else "" end)
            elif (.change.actions == ["no-op"] and (.change.importing // false)) then 
                "= " + .address 
-           else empty end' "$file"
+           else empty end' "$file" 2>/dev/null
     
     # Show output changes with appropriate symbols
     jq -r '.output_changes // {} | 
@@ -339,7 +465,7 @@ generate_short_output() {
                "~ output." + .key
            elif (.value.actions | contains(["delete"])) then 
                "- output." + .key
-           else empty end' "$file"
+           else empty end' "$file" 2>/dev/null
 }
 
 # Show "No changes" message when there are no modifications
@@ -463,7 +589,7 @@ EOF
                        elif .action == "no-op" then 4 
                        else 5 end) | 
                map("- **\(.action)**: \(.count)") | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
         
         # Add importing count if there are any
         local importing_count
@@ -481,14 +607,14 @@ EOF
                group_by(.type) | 
                map("- **\(.[0].type)**: \(length)") | 
                sort | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
         
         cat << EOF
 
 ## Plan Summary
 
 EOF
-        jq -r '"- **Terraform Version**: \(.terraform_version)\n- **Total Resource Changes**: \((.resource_changes // []) | length)\n- **Applyable**: \(.applyable)"' "$file"
+        jq -r '"- **Terraform Version**: \(.terraform_version)\n- **Total Resource Changes**: \((.resource_changes // []) | length)\n- **Applyable**: \(.applyable)"' "$file" 2>/dev/null
     else
         echo "🔍 Terraform Plan Analysis for: $file"
         echo "=============================================="
@@ -505,7 +631,7 @@ EOF
                        elif .action == "no-op" then 4 
                        else 5 end) | 
                map("\(.action): \(.count)") | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
         
         # Add importing count if there are any
         local importing_count
@@ -521,14 +647,14 @@ EOF
                group_by(.type) | 
                map("  \(.[0].type): \(length)") | 
                sort | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
 
         echo ""
         echo "📊 Plan Summary:"
         echo "---------------"
         jq -r '"Terraform Version: \(.terraform_version)
 Total Resource Changes: \((.resource_changes // []) | length)
-Applyable: \(.applyable)"' "$file"
+Applyable: \(.applyable)"' "$file" 2>/dev/null
     fi
 }
 
@@ -550,7 +676,7 @@ generate_summary() {
                        elif .action == "forget" then 4 
                        else 5 end) | 
                map("- **\(.action)**: \(.count)") | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
         
         # Add importing count if there are any
         local importing_count
@@ -573,7 +699,7 @@ generate_summary() {
                            elif .action == "delete" then 3 
                            else 5 end) | 
                    map("- **\(.action)**: \(.count)") | 
-                   .[]' "$file"
+                   .[]' "$file" 2>/dev/null
         fi
     else
         echo "  Resource Changes:"
@@ -587,7 +713,7 @@ generate_summary() {
                        elif .action == "forget" then 4 
                        else 5 end) | 
                map("    \(.action): \(.count)") | 
-               .[]' "$file"
+               .[]' "$file" 2>/dev/null
         
         # Add importing count if there are any
         local importing_count
@@ -609,7 +735,7 @@ generate_summary() {
                            elif .action == "delete" then 3 
                            else 5 end) | 
                    map("    \(.action): \(.count)") | 
-                   .[]' "$file"
+                   .[]' "$file" 2>/dev/null
         fi
     fi
 }
@@ -622,11 +748,10 @@ generate_summary() {
 check_github_comment_limit() {
     local output="$1"
     local char_count=${#output}
-    local limit=65536
     
-    if [ "$char_count" -gt "$limit" ]; then
+    if [ "$char_count" -gt "$GITHUB_COMMENT_LIMIT" ]; then
         echo "⚠️  Warning: Output exceeds GitHub comment limit!"
-        echo "   Character count: $char_count / $limit"
+        echo "   Character count: $char_count / $GITHUB_COMMENT_LIMIT"
         echo "   Consider using --short mode or reducing the scope of changes."
         echo ""
         return 1
@@ -639,45 +764,49 @@ check_github_comment_limit() {
 # OUTPUT GENERATION FUNCTION
 # =============================================================================
 
-# Function to generate output based on mode
-generate_mode_output() {
-    case "$SHOW_MODE" in
+# Unified function to generate output based on mode
+show_changes_output() {
+    local file="$1"
+    local markdown="$2"
+    local mode="$3"
+    
+    case "$mode" in
         "short")
-            if has_any_changes "$TFPLAN_FILE"; then
-                if [ "$MARKDOWN" = "true" ]; then
-                    echo "<details open><summary>Short Terraform Plan Output </summary>"
-                    echo ""
+            if has_any_changes "$file"; then
+                if [ "$markdown" = "true" ]; then
+                    echo "<details><summary>Short Result (Click me)</summary>"
+                    echo "" 
                     echo '`+` create , `~` update , `-` delete , `+/-` replace , `#` remove , `=` import(no change)'
                     echo "\`\`\`hcl"
-                    generate_short_output "$TFPLAN_FILE"
+                    generate_short_output "$file"
                     echo "\`\`\`"
                     echo "</details>"
                 else
-                    generate_short_output "$TFPLAN_FILE"
+                    generate_short_output "$file"
                 fi
             else
-                show_no_changes "$MARKDOWN"
+                show_no_changes "$markdown"
             fi
             ;;
         "detail")
-            if has_any_changes "$TFPLAN_FILE"; then
-                show_detail_output "$TFPLAN_FILE" "$MARKDOWN"
+            if has_any_changes "$file"; then
+                show_detail_output "$file" "$markdown"
             else
-                show_no_changes "$MARKDOWN"
+                show_no_changes "$markdown"
             fi
             ;;
         "no-op")
-            show_no_op_output "$TFPLAN_FILE" "$MARKDOWN"
+            show_no_op_output "$file" "$markdown"
             ;;
         "basic")
-            if has_any_changes "$TFPLAN_FILE"; then
-                show_basic_output "$TFPLAN_FILE" "$MARKDOWN"
+            if has_any_changes "$file"; then
+                show_basic_output "$file" "$markdown"
             else
-                show_no_changes "$MARKDOWN"
+                show_no_changes "$markdown"
             fi
             ;;
         *)
-            echo "Error: Invalid mode '$SHOW_MODE'"
+            echo "Error: Invalid mode '$mode'" >&2
             exit 1
             ;;
     esac
@@ -697,7 +826,7 @@ fi
 check_jq
 
 # Initialize variables
-SHOW_MODE="basic"
+SHOW_MODE="$DEFAULT_MODE"
 MARKDOWN="false"
 GITHUB_COMMENT="false"
 
@@ -726,7 +855,7 @@ while [[ $1 == --* ]]; do
             shift
             ;;
         *)
-            echo "Error: Unknown option '$1'"
+            echo "Error: Unknown option '$1'" >&2
             echo "Use -h or --help for usage information."
             exit 1
             ;;
@@ -736,20 +865,21 @@ done
 # Validate input file
 TFPLAN_FILE="$1"
 if [ -z "$TFPLAN_FILE" ]; then
-    echo "Error: No input file specified"
+    echo "Error: No input file specified" >&2
     echo "Use -h or --help for usage information."
     exit 1
 fi
 
 if [ ! -f "$TFPLAN_FILE" ]; then
-    echo "Error: File '$TFPLAN_FILE' not found"
+    echo "Error: File '$TFPLAN_FILE' not found" >&2
     exit 1
 fi
 
 # Execute analysis based on selected mode
 if [ "$GITHUB_COMMENT" = "true" ]; then
     # For GitHub comment mode, capture output and check character limit
-    OUTPUT=$(generate_mode_output)    
+    OUTPUT=$(show_changes_output "$TFPLAN_FILE" "$MARKDOWN" "$SHOW_MODE")
+    
     # Check character limit for GitHub comments
     check_github_comment_limit "$OUTPUT"
     
@@ -757,46 +887,7 @@ if [ "$GITHUB_COMMENT" = "true" ]; then
     echo "$OUTPUT"
 else
     # Normal execution without GitHub comment checks
-    case "$SHOW_MODE" in
-        "short")
-            if has_any_changes "$TFPLAN_FILE"; then
-                if [ "$MARKDOWN" = "true" ]; then
-                    echo "<details><summary>Short Result (Click me)</summary>"
-                    echo "" 
-                    echo '`+` create , `~` update , `-` delete , `+/-` replace , `#` remove , `=` import(no change)'
-                    echo "\`\`\`hcl"
-                    generate_short_output "$TFPLAN_FILE"
-                    echo "\`\`\`"
-                    echo "</details>"
-                else
-                    generate_short_output "$TFPLAN_FILE"
-                fi
-            else
-                show_no_changes "$MARKDOWN"
-            fi
-            ;;
-        "detail")
-            if has_any_changes "$TFPLAN_FILE"; then
-                show_detail_output "$TFPLAN_FILE" "$MARKDOWN"
-            else
-                show_no_changes "$MARKDOWN"
-            fi
-            ;;
-        "no-op")
-            show_no_op_output "$TFPLAN_FILE" "$MARKDOWN"
-            ;;
-        "basic")
-            if has_any_changes "$TFPLAN_FILE"; then
-                show_basic_output "$TFPLAN_FILE" "$MARKDOWN"
-            else
-                show_no_changes "$MARKDOWN"
-            fi
-            ;;
-        *)
-            echo "Error: Invalid mode '$SHOW_MODE'"
-            exit 1
-            ;;
-    esac
+    show_changes_output "$TFPLAN_FILE" "$MARKDOWN" "$SHOW_MODE"
 fi
 
 # =============================================================================
